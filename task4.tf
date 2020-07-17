@@ -20,7 +20,7 @@ resource "aws_subnet" "public-subnet" {
   map_public_ip_on_launch = "true"
   availability_zone = "ap-south-1b"
   tags = {
-    Name = "snehalsub1"  
+    Name = "public_subnet"  
   }
 }
 
@@ -30,9 +30,24 @@ resource "aws_subnet" "private-subnet" {
   cidr_block = "192.168.0.0/24"
   availability_zone = "ap-south-1a"
   tags = {
-    Name = "snehalsub2"
+    Name = "private_subnet"
   }
 }
+
+#Elastip IP for NAT Gateway
+resource "aws_eip" "elasticip"{
+  vpc = true
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.elasticip.id
+  subnet_id = aws_subnet.public-subnet.id
+  
+  tags = {
+    Name = "Natgw"
+  }
+}
+
 
 #internet gateway
 resource "aws_internet_gateway" "internet-gateway" {
@@ -42,26 +57,51 @@ resource "aws_internet_gateway" "internet-gateway" {
   }  
 }
 
-#roting table
-resource "aws_route_table" "r" {
+#roting table1
+resource "aws_route_table" "igwrt" {
   vpc_id = aws_vpc.myvpc1.id
 
    tags = {
-    Name = "route_table"
+    Name = "internet_gw_rt"
   }
 }
 
-
-resource "aws_route_table_association" "a" {
-  subnet_id      = aws_subnet.public-subnet.id
-  route_table_id = aws_route_table.r.id
-}
-
-resource "aws_route" "b" {
-  route_table_id = aws_route_table.r.id
+resource "aws_route" "r1" {
+  route_table_id = aws_route_table.igwrt.id
   destination_cidr_block ="0.0.0.0/0"
   gateway_id     = aws_internet_gateway.internet-gateway.id
 }
+
+resource "aws_route_table_association" "rta1" {
+  subnet_id      = aws_subnet.public-subnet.id
+  route_table_id = aws_route_table.igwrt.id
+}
+
+
+
+
+#roting table2
+resource "aws_route_table" "ngwrt" {
+  vpc_id = aws_vpc.myvpc1.id
+
+   tags = {
+    Name = "nat_gw_rt"
+  }
+}
+
+resource "aws_route" "r2" {
+  route_table_id = aws_route_table.ngwrt.id
+  destination_cidr_block ="0.0.0.0/0"
+  gateway_id     = aws_nat_gateway.nat.id
+}
+
+
+resource "aws_route_table_association" "rta2" {
+  subnet_id      = aws_subnet.private-subnet.id
+  route_table_id = aws_route_table.ngwrt.id
+}
+
+
 
 //Creating key
 resource "tls_private_key" "mykey"{
@@ -74,9 +114,9 @@ module "key_pair"{
  public_key = tls_private_key.mykey.public_key_openssh
 }
 
-#security group
-resource "aws_security_group" "new_sg" {
-  name        = "allow_tls"
+#security group fro wordpress
+resource "aws_security_group" "wp_sg" {
+  name        = "wordpress"
   description = "Allow TLS inbound traffic"
   vpc_id      = aws_vpc.myvpc1.id
 
@@ -108,45 +148,41 @@ resource "aws_security_group" "new_sg" {
 }
 
 //Launching Instance
-resource "aws_instance" "myweb" {
+resource "aws_instance" "wordpress" {
   ami           = "ami-004a955bfb611bf13"
   instance_type = "t2.micro"
   subnet_id = "${aws_subnet.public-subnet.id}"
-  vpc_security_group_ids = ["${aws_security_group.new_sg.id}"]
+  security_groups = ["${aws_security_group.wp_sg.id}"]
   key_name = "new_key"
   tags = {
-    Name = "Webserver"
+    Name = "Wordpress_OS"
   }
   
 }
 
 //Security Group
-resource "aws_security_group" "new_sg2" {
+resource "aws_security_group" "mysg" {
   name        = "sg_mysql"
   description = "Allow MYSQL"
-  vpc_id      = aws_vpc.myvpc1.id 
-  ingress {
-    description = "SSH"
+  vpc_id      = aws_vpc.myvpc1.id
+ 
+ ingress {
+    description = "MYSQL/Aurora"
+    from_port   = 0
+    to_port     = 3306
+    protocol    = "tcp"
+    security_groups = [ aws_security_group.wp_sg.id ]
+  }
+   
+   ingress {
+    description = "ssh"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["${aws_subnet.public-subnet.cidr_block}"]
+    security_groups = [ aws_security_group.wp_sg.id ]
   }
-  ingress {
-    description = "TLS from VPC"
-    from_port   = 3306
-    to_port     = 3306
-    protocol    = "tcp"
-    cidr_blocks = ["${aws_subnet.public-subnet.cidr_block}"]
-  }
-  ingress {
-    description = "ICMP - IPv4"
-    from_port = -1
-    to_port	= -1
-    protocol	= "icmp"
-    cidr_blocks = ["${aws_subnet.public-subnet.cidr_block}"]
-  }
-  egress {
+ 
+   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -162,9 +198,9 @@ resource "aws_instance" "mysql" {
   ami           = "ami-08706cb5f68222d09"
   instance_type = "t2.micro"
   subnet_id = "${aws_subnet.private-subnet.id}"
-  vpc_security_group_ids = ["${aws_security_group.new_sg2.id}"]
+  security_groups=[aws_security_group.mysg.id]
   key_name = "new_key"
   tags = {
-    Name = "MySQL"
+    Name = "MySQL_OS"
   }
 }
