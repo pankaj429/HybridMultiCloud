@@ -1,7 +1,7 @@
 #creating profile
 provider "aws" {
  region = "ap-south-1"
- profile = "snehal"
+ profile = "pankaj"
 }
 
 #key pair
